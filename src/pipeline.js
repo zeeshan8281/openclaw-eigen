@@ -149,8 +149,7 @@ async function runPipeline(topic) {
     console.log('═══════════════════════════════════════════════════════════\n');
 
     // Health checks
-    console.log('--- Pre-flight checks ---');
-    const ollamaOk = await ollama.healthCheck();
+    const ollamaOk = await ollama.healthCheck().catch(() => false);
     const eigenaiOk = await eigenai.healthCheck();
     const eigendaOk = await eigenda.healthCheck();
 
@@ -159,11 +158,11 @@ async function runPipeline(topic) {
     if (ollamaOk) {
         research = await researchAgent(topic);
     } else if (eigenaiOk) {
-        console.log('[Pipeline] Ollama missing, using EigenAI for Research...');
+        console.log('[Pipeline] Using EigenAI for Research...');
         const res = await eigenai.chatCompletion("You are an expert SEO researcher. Output structured markdown.", `Research topic: ${topic}`, 1000);
         research = res.content;
     } else {
-        throw new Error('No LLM services available (Ollama and EigenAI both down)');
+        throw new Error('No LLM services available');
     }
     console.log(`\n📊 Research complete (${research.length} chars)\n`);
 
@@ -172,8 +171,8 @@ async function runPipeline(topic) {
     if (ollamaOk) {
         draft = await writerAgent(topic, research);
     } else if (eigenaiOk) {
-        console.log('[Pipeline] Ollama missing, using EigenAI for Drafting...');
-        const res = await eigenai.chatCompletion("You are a senior technical writer. Write a complete technical article in markdown.", `Topic: ${topic}\n\nResearch:\n${research}`, 4096);
+        console.log('[Pipeline] Using EigenAI for Drafting...');
+        const res = await eigenai.chatCompletion("You are a senior technical writer. Write a complete technical article in markdown.", `Topic: ${topic}\n\nResearch:\n${research}`, 4092);
         draft = res.content;
     }
     console.log(`\n📝 Draft complete (${draft.length} chars)\n`);

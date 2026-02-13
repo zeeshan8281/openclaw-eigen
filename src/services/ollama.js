@@ -104,10 +104,9 @@ class OllamaService {
         try {
             const response = await axios.get(`${this.baseUrl}/api/tags`, { timeout: 5000 });
             const models = response.data.models || [];
-            console.log(`[Ollama] ✅ Running with ${models.length} model(s): ${models.map(m => m.name).join(', ')}`);
             return models.length > 0;
         } catch (error) {
-            console.error('[Ollama] ❌ Not reachable:', error.message);
+            // Quiet fail - EigenAI is the main service
             return false;
         }
     }

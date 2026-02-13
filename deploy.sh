@@ -4,7 +4,7 @@ set -e
 echo "=== Deploying OpenClaw News Agent to EigenCompute ==="
 echo ""
 
-APP_NAME="autonomous-agent"
+APP_NAME="0x2EDFA14232bde724e2dc7bE958f8e5c00f644410"
 ENV_FILE=".env"
 
 # Check auth

@@ -1,0 +1,10 @@
+{
+    "gateway": {
+        "port": 3000,
+        "bind": "lan",
+        "auth": {
+            "mode": "token",
+            "token": "eigen123"
+        }
+    }
+}

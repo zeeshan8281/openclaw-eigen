@@ -84,13 +84,12 @@ class EigenDAService {
     async healthCheck() {
         try {
             const response = await this.client.get('/health', {
-                validateStatus: () => true
+                validateStatus: () => true,
+                timeout: 3000
             });
-            const ok = response.status === 200 || response.status === 404;
-            if (ok) console.log('[EigenDA] ✅ Proxy is healthy');
-            return ok;
+            return response.status === 200 || response.status === 404;
         } catch (error) {
-            console.error('[EigenDA] ❌ Proxy unreachable:', error.message);
+            // Quiet fail - DA is optional if proxy isn't started
             return false;
         }
     }
@@ -98,8 +97,8 @@ class EigenDAService {
     _formatError(error) {
         if (axios.isAxiosError(error) && error.response) {
             return `HTTP ${error.response.status}: ${typeof error.response.data === 'string'
-                    ? error.response.data
-                    : JSON.stringify(error.response.data)
+                ? error.response.data
+                : JSON.stringify(error.response.data)
                 }`;
         }
         return error.message || String(error);
