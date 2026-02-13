@@ -1,0 +1,15 @@
+node_modules
+.env
+.env.*
+.DS_Store
+output/
+.openclaw/
+*.bak
+*.bak.*
+data/
+public/
+autonomous-agent/
+autonomous-website/
+ollama-proxy.js
+alfred-bot.js
+package-lock.json

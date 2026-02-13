@@ -1,0 +1,45 @@
+{
+  "name": "openclaw-autonomous",
+  "version": "1.0.0",
+  "description": "Verifiable Content Generation Pipeline — $0 Local Build using Ollama + EigenAI + EigenDA",
+  "main": "src/pipeline.js",
+  "scripts": {
+    "news": "node src/news-cycle.js",
+    "news:cron": "node src/news-cron.js",
+    "news:scheduler": "node src/scheduler.js",
+    "proxy": "node eigenai-proxy.js",
+    "pipeline": "node src/pipeline.js",
+    "health": "node src/health-check.js",
+    "deploy": "bash deploy.sh",
+    "test:eigenai": "node -e \"const {EigenAIService} = require('./src/services/eigenai'); const s = new EigenAIService(); s.healthCheck()\"",
+    "test:eigenda": "node -e \"const {EigenDAService} = require('./src/services/eigenda'); const s = new EigenDAService(); s.healthCheck()\""
+  },
+  "keywords": [
+    "eigencloud",
+    "eigenai",
+    "eigenda",
+    "ollama",
+    "verifiable",
+    "ai",
+    "content-pipeline"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@tryghost/admin-api": "^1.13.12",
+    "axios": "^1.6.2",
+    "cors": "^2.8.6",
+    "dotenv": "^16.3.1",
+    "ethers": "^6.13.4",
+    "express": "^5.2.1",
+    "node-telegram-bot-api": "^0.67.0",
+    "openai": "^4.40.0",
+    "rss-parser": "^3.13.0",
+    "socket.io": "^4.8.3",
+    "twitter-api-v2": "^1.17.2",
+    "viem": "^2.45.2"
+  },
+  "devDependencies": {
+    "@layr-labs/ecloud-cli": "^0.3.3"
+  }
+}
