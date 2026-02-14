@@ -1,10 +1,7 @@
 {
     "name": "openclaw-skill-curator",
-    "version": "1.0.0",
-    "description": "Curator skill for OpenClaw",
+    "version": "2.0.0",
+    "description": "Information Curator Agent skill for OpenClaw A2A",
     "main": "index.js",
-    "dependencies": {
-        "rss-parser": "^3.13.0",
-        "axios": "^1.6.0"
-    }
+    "dependencies": {}
 }

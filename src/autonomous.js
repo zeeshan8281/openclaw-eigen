@@ -1,49 +1,40 @@
-const { runPipeline } = require('./pipeline');
 const { runNewsCycle } = require('./news-cycle');
 const { EigenAIService } = require('./services/eigenai');
 const { OpenRouterService } = require('./services/openrouter');
 const TelegramBot = require('node-telegram-bot-api');
+const express = require('express');
 const axios = require('axios');
 require('dotenv').config();
 
 // Configuration
-const PUBLISH_URL = process.env.PUBLISH_URL || 'https://autonomous-website.vercel.app/api/publish';
-const INTERVAL_MS = parseInt(process.env.CRON_INTERVAL, 10) || 4 * 60 * 60 * 1000; // Default 4h
+const INTERVAL_MS = parseInt(process.env.CRON_INTERVAL, 10) || 4 * 60 * 60 * 1000;
 const BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
-const CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+const API_PORT = parseInt(process.env.PORT, 10) || 3001;
+const API_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || null;
+let CHAT_ID = process.env.TELEGRAM_CHAT_ID || null;
 
 // Service Initialization
 const eigenai = new EigenAIService();
 const openrouter = new OpenRouterService();
 
-// Determine primary LLM
 const USE_OPENROUTER = !!process.env.OPENROUTER_API_KEY;
 const LLM_MODEL = USE_OPENROUTER ? openrouter.model : 'eigenai-120b';
 const LLM_NAME = USE_OPENROUTER ? `OpenRouter (${LLM_MODEL})` : 'EigenAI (120B)';
 
-console.log(`[Autonomous] Using Primary LLM: ${LLM_NAME}`);
+console.log(`[Autonomous] LLM: ${LLM_NAME}`);
 
-const TOPICS = [
-    "The implications of EIP-4844 on Ethereum L2 fees",
-    "Understanding the role of EigenDA in Data Availability",
-    "ZK-SNARK vs ZK-STARK: A privacy comparison",
-    "The future of decentralized sequencers",
-    "Restaking risks: Slashing conditions explained",
-    "Optimistic Rollups: Fraud proof lifecycle analysis"
-];
-
-const SYSTEM_PROMPT = `You are Alfred, a helpful crypto & tech assistant on Telegram. 
+const SYSTEM_PROMPT = `You are Alfred, a helpful crypto & tech assistant on Telegram.
 You are powered by ${LLM_NAME} inside a secure EigenCompute TEE.
 
 STRICT OPERATIONAL RULES:
-1. ONLY output the direct response to the user. 
-2. NEVER explain what you are doing. 
+1. ONLY output the direct response to the user.
+2. NEVER explain what you are doing.
 3. NEVER narrate your internal reasoning.
-4. NEVER use meta-talk like "The user said" or "We should respond with". 
+4. NEVER use meta-talk like "The user said" or "We should respond with".
 5. NO Markdown tables. Use bold text and bullet points only.
 6. Keep it conversational, friendly, and concise.`;
 
-// Per-chat conversation history for LLM
+// Per-chat conversation history
 const history = new Map();
 const MAX_HISTORY = 10;
 
@@ -53,12 +44,11 @@ function getHistory(chatId) {
 }
 
 // ─────────────────────────────────────────────────
-// LLM Chat Logic
+// LLM Chat
 // ─────────────────────────────────────────────────
 async function askLLM(chatId, userMessage) {
     const msgs = getHistory(chatId);
 
-    // Better structure to avoid "Narrator" mode
     const historyBlock = msgs.length > 0
         ? `[CONVERSATION HISTORY]\n${msgs.map(m => `${m.role === 'user' ? 'User' : 'Alfred'}: ${m.content}`).join('\n')}\n`
         : '';
@@ -73,14 +63,12 @@ async function askLLM(chatId, userMessage) {
             result = await eigenai.chatCompletion(SYSTEM_PROMPT, fullUserPrompt, 1000);
         }
 
-        // CLEANUP: Strip base-model tags and meta-talk
         let reply = result.content
-            .replace(/<\|.*?\|>/g, '') // Strip hidden model tags
-            .replace(/(The user (said|gave|says)|Probably a greeting|So we respond|We need to respond|User says|analysis|User asks).*?(\*\*|Alfred:)/gis, '') // Strip meta-talk
-            .replace(/Alfred: /g, '') // Strip self-labeling
+            .replace(/<\|.*?\|>/g, '')
+            .replace(/(The user (said|gave|says)|Probably a greeting|So we respond|We need to respond|User says|analysis|User asks).*?(\*\*|Alfred:)/gis, '')
+            .replace(/Alfred: /g, '')
             .trim();
 
-        // One last safety check
         if (reply.includes("Alfred:")) reply = reply.split("Alfred:").pop().trim();
 
         msgs.push({ role: 'user', content: userMessage });
@@ -89,23 +77,57 @@ async function askLLM(chatId, userMessage) {
         return reply;
     } catch (err) {
         console.error(`[LLM] Error: ${err.message}`);
-        return `I'm having a brief connection issue with EigenAI. (${err.message})`;
+        return `Sorry, I'm having a connection issue right now. Try again in a moment.`;
     }
 }
 
 // ─────────────────────────────────────────────────
-// Telegram Delivery Helpers
+// Telegram Setup
 // ─────────────────────────────────────────────────
 let bot = null;
-if (BOT_TOKEN) {
-    try {
-        bot = new TelegramBot(BOT_TOKEN, { polling: true }); // Polling ENABLED for interactivity
-        console.log('[Telegram] ✅ Bot initialized with Polling');
-    } catch (e) {
-        console.error('[Telegram] ❌ Initialization failed:', e.message);
+
+async function initTelegram() {
+    if (!BOT_TOKEN) {
+        console.warn('[Telegram] No BOT_TOKEN — skipping');
+        return;
     }
+
+    // Clear any stale webhook/polling before starting
+    try {
+        await axios.post(`https://api.telegram.org/bot${BOT_TOKEN}/deleteWebhook`, {
+            drop_pending_updates: true
+        });
+        console.log('[Telegram] Cleared stale webhook/updates');
+    } catch (e) {
+        console.warn('[Telegram] Could not clear webhook:', e.message);
+    }
+
+    // Small delay to let Telegram release the polling lock
+    await new Promise(r => setTimeout(r, 2000));
+
+    bot = new TelegramBot(BOT_TOKEN, {
+        polling: {
+            interval: 1000,
+            autoStart: true,
+            params: { timeout: 30 }
+        }
+    });
+
+    bot.on('polling_error', (err) => {
+        if (err.code === 'ETELEGRAM' && err.message.includes('409')) {
+            console.error('[Telegram] 409 Conflict — another instance is running. Will retry...');
+        } else {
+            console.error('[Telegram] Polling error:', err.code, err.message);
+        }
+    });
+
+    console.log('[Telegram] Bot started with polling');
+    setupCommands();
 }
 
+// ─────────────────────────────────────────────────
+// Send helper
+// ─────────────────────────────────────────────────
 async function sendToTelegram(chatId, text) {
     if (!bot || !chatId) return;
     try {
@@ -114,154 +136,224 @@ async function sendToTelegram(chatId, text) {
             await bot.sendMessage(chatId, chunk, { parse_mode: 'Markdown', disable_web_page_preview: true });
         }
     } catch (e) {
-        console.error('[Telegram] ❌ Send failed:', e.message);
+        // Markdown can fail on special chars — retry without parse_mode
+        try {
+            const chunks = text.match(/[\s\S]{1,4000}/g) || [];
+            for (const chunk of chunks) {
+                await bot.sendMessage(chatId, chunk);
+            }
+        } catch (e2) {
+            console.error('[Telegram] Send failed:', e2.message);
+        }
     }
 }
 
 // ─────────────────────────────────────────────────
-// Command Handlers
+// Curator
 // ─────────────────────────────────────────────────
 const Curator = require('./curator');
 const curator = new Curator();
 
 // ─────────────────────────────────────────────────
-// Command Handlers
+// Commands
 // ─────────────────────────────────────────────────
-if (bot) {
+function setupCommands() {
     bot.onText(/\/start/, (msg) => {
-        bot.sendMessage(msg.chat.id,
-            "👋 Hey! I'm Alfred, your TEE-secured crypto assistant.\n\n" +
-            "I'm currently running in an EigenCompute TEE node.\n\n" +
+        const chatId = msg.chat.id;
+        // Auto-save chat ID for background notifications
+        if (!CHAT_ID) {
+            CHAT_ID = String(chatId);
+            console.log(`[Telegram] Auto-detected CHAT_ID: ${CHAT_ID}`);
+        }
+        bot.sendMessage(chatId,
+            "Hey! I'm Alfred, your TEE-secured crypto assistant.\n\n" +
             "Commands:\n" +
-            "/news — Get an immediate real-time news briefing\n" +
-            "/research <topic> — Trigger a deep autonomous research article\n" +
-            "/curate — Manually trigger a curation cycle (RSS -> Score)\n" +
-            "/signals — View high-signal items found by the Curator\n" +
-            "/help — Show this message"
+            "/news - Real-time news briefing\n" +
+            "/curate - Trigger RSS curation cycle\n" +
+            "/signals - View high-signal items\n" +
+            "/whoami - Show your chat ID\n" +
+            "/help - Show this message\n\n" +
+            "Or just chat with me!"
         );
+    });
+
+    bot.onText(/\/help/, (msg) => {
+        bot.sendMessage(msg.chat.id,
+            "Commands:\n" +
+            "/news - Real-time news briefing\n" +
+            "/curate - Trigger RSS curation cycle\n" +
+            "/signals - View high-signal items\n" +
+            "/whoami - Show your chat ID\n" +
+            "/help - Show this message\n\n" +
+            "Or just send me any message to chat!"
+        );
+    });
+
+    bot.onText(/\/whoami/, (msg) => {
+        bot.sendMessage(msg.chat.id, `Your chat ID: ${msg.chat.id}`);
     });
 
     bot.onText(/\/curate/, async (msg) => {
         const chatId = msg.chat.id;
-        bot.sendMessage(chatId, "🕵️ Starting manual curation cycle...");
+        bot.sendMessage(chatId, "Starting curation cycle...");
         try {
             await curator.runCycle();
             const stats = curator.getDetails();
-            bot.sendMessage(chatId, `✅ Cycle complete.\n\n${stats}`);
+            bot.sendMessage(chatId, `Done!\n\n${stats}`);
         } catch (err) {
-            bot.sendMessage(chatId, `❌ Curation failed: ${err.message}`);
+            bot.sendMessage(chatId, `Curation failed: ${err.message}`);
         }
     });
 
-    bot.onText(/\/signals/, async (msg) => {
+    bot.onText(/\/signals/, (msg) => {
         const chatId = msg.chat.id;
-        const signals = curator.memory.highSignals; // Access direct safe memory
+        const signals = curator.memory.highSignals;
         if (signals.length === 0) {
-            bot.sendMessage(chatId, "📭 No high-signal items found yet.");
+            bot.sendMessage(chatId, "No high-signal items found yet. Run /curate first.");
         } else {
-            const text = signals.slice(-5).map(s => `🔥 *${s.score}/10*: [${s.title}](${s.link})`).join('\n\n');
-            bot.sendMessage(chatId, `🧠 *Active High-Signal Items:*\n\n${text}`, { parse_mode: 'Markdown' });
+            const text = signals.slice(-5).map(s => `[${s.score}/10] ${s.title}\n${s.link}`).join('\n\n');
+            bot.sendMessage(chatId, `High-Signal Items:\n\n${text}`);
         }
     });
 
     bot.onText(/\/news/, async (msg) => {
         const chatId = msg.chat.id;
         bot.sendChatAction(chatId, 'typing');
-        bot.sendMessage(chatId, "🔎 Gathering latest news from RSS and HackerNews...");
+        bot.sendMessage(chatId, "Gathering latest news...");
 
         try {
-            const result = await runNewsCycle({ storeOnDA: true });
-            let text = `📰 *Latest Crypto & Tech Briefing*\n\n${result.briefing}`;
+            const result = await runNewsCycle({ storeOnDA: false });
+            let text = `Latest Briefing:\n\n${result.briefing}`;
             if (result.proof?.commitment) {
-                text += `\n\n🔗 *EigenDA Proof:* https://blobs-sepolia.eigenda.xyz/blobs/${result.proof.commitment}`;
+                text += `\n\nEigenDA Proof: https://blobs-sepolia.eigenda.xyz/blobs/${result.proof.commitment}`;
             }
             await sendToTelegram(chatId, text);
         } catch (err) {
-            bot.sendMessage(chatId, `❌ News cycle failed: ${err.message}`);
+            bot.sendMessage(chatId, `News cycle failed: ${err.message}`);
         }
     });
 
-    bot.onText(/\/research (.+)/, async (msg, match) => {
-        const chatId = msg.chat.id;
-        const topic = match[1];
-        bot.sendMessage(chatId, `🚀 Starting deep research on: "${topic}"\nThis takes ~1-2 minutes...`);
-
-        try {
-            const result = await runPipeline(topic);
-            let text = `📄 *Deep Research Complete: ${topic}*\n\n${result.finalContent.substring(0, 1500)}...`;
-            if (result.commitment) {
-                text += `\n\n🔗 *Verifiable Proof (EigenDA):* https://blobs-sepolia.eigenda.xyz/blobs/${result.commitment}`;
-            }
-            await sendToTelegram(chatId, text);
-        } catch (err) {
-            bot.sendMessage(chatId, `❌ Research failed: ${err.message}`);
-        }
-    });
-
-    // Handle normal chat messages
+    // Free chat — any non-command message
     bot.on('message', async (msg) => {
         if (!msg.text || msg.text.startsWith('/')) return;
         const chatId = msg.chat.id;
         bot.sendChatAction(chatId, 'typing');
         const reply = await askLLM(chatId, msg.text);
-        bot.sendMessage(chatId, reply);
+        await sendToTelegram(chatId, reply);
     });
 }
 
 // ─────────────────────────────────────────────────
-// Background Autonomous Loop
+// Express API (A2A + Human access)
+// ─────────────────────────────────────────────────
+const app = express();
+app.use(express.json());
+
+// Simple token auth middleware
+function authMiddleware(req, res, next) {
+    if (!API_TOKEN) return next(); // No token configured = open access
+    const token = req.headers.authorization?.replace('Bearer ', '') || req.query.token;
+    if (token !== API_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
+    next();
+}
+
+// Health check (no auth)
+app.get('/health', (req, res) => {
+    res.json({
+        status: 'running',
+        uptime: process.uptime(),
+        telegram: !!bot,
+        feeds: curator.memory.seenHashes.length,
+        signals: curator.memory.highSignals.length
+    });
+});
+
+// Get high-signal items
+app.get('/api/signals', authMiddleware, (req, res) => {
+    const limit = parseInt(req.query.limit) || 20;
+    const signals = curator.memory.highSignals.slice(-limit).reverse();
+    res.json({ count: signals.length, signals });
+});
+
+// Get latest news briefing
+app.get('/api/briefing', authMiddleware, async (req, res) => {
+    try {
+        const result = await runNewsCycle({ storeOnDA: false });
+        res.json({
+            briefing: result.briefing,
+            articleCount: result.articleCount,
+            proof: result.proof || null
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+// Get curator stats
+app.get('/api/stats', authMiddleware, (req, res) => {
+    res.json({
+        feeds: curator.memory.seenHashes ? 6 : 0,
+        seenItems: curator.memory.seenHashes.length,
+        highSignals: curator.memory.highSignals.length,
+        llm: LLM_NAME,
+        interval: `${INTERVAL_MS / 1000 / 60} min`
+    });
+});
+
+// Trigger a curation cycle
+app.post('/api/curate', authMiddleware, async (req, res) => {
+    try {
+        await curator.runCycle();
+        res.json({ ok: true, stats: curator.getDetails() });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
+function startAPI() {
+    app.listen(API_PORT, '0.0.0.0', () => {
+        console.log(`[API] Listening on port ${API_PORT}`);
+    });
+}
+
+// ─────────────────────────────────────────────────
+// Background Loop
 // ─────────────────────────────────────────────────
 async function startAutonomousAgent() {
-    console.log('--- STARTUP DIAGNOSTICS ---');
-    console.log(`WALLET: ${process.env.WALLET_ADDRESS}`);
-    console.log(`TELEGRAM: ${!!process.env.TELEGRAM_BOT_TOKEN}`);
-    console.log(`POLLING: Enabled`);
-    console.log('--- END DIAGNOSTICS ---');
+    console.log('--- STARTUP ---');
+    console.log(`WALLET: ${process.env.WALLET_ADDRESS || 'not set'}`);
+    console.log(`TELEGRAM: ${!!BOT_TOKEN}`);
+    console.log(`API: port ${API_PORT}`);
+    console.log(`INTERVAL: ${INTERVAL_MS / 1000 / 60} min`);
+    console.log('---------------');
 
-    // Startup Delay
-    await new Promise(r => setTimeout(r, 2000));
+    // Start Express API
+    startAPI();
 
+    // Start Telegram bot
+    await initTelegram();
+
+    // Background curator loop
     while (true) {
-        // 1. Run The Curator (High Frequency Signal Check)
-        console.log(`\n[${new Date().toISOString()}] 🕵️ Running Curator Cycle...`);
+        await new Promise(r => setTimeout(r, INTERVAL_MS));
+
+        console.log(`\n[${new Date().toISOString()}] Running background curator cycle...`);
         try {
             await curator.runCycle();
-        } catch (err) {
-            console.error('⚠️ Curator cycle failed (Non-fatal):', err.message);
-        }
-
-        // 2. Run Deep Research (Low Frequency)
-        // Only run deep research every 4th cycle or so, but for now we run it every time
-        const topic = TOPICS[Math.floor(Math.random() * TOPICS.length)];
-        console.log(`\n[${new Date().toISOString()}] 🤖 Deep Cycle Start: "${topic}"`);
-
-        try {
-            const result = await runPipeline(topic);
-
-            // Deliver to default chat if configured
-            if (CHAT_ID) {
-                let text = `🤖 *Autonomous Briefing: ${topic}*\n\n${result.finalContent.substring(0, 1000)}...`;
-                if (result.commitment) {
-                    text += `\n\n🔗 *EigenDA Proof:* https://blobs-sepolia.eigenda.xyz/blobs/${result.commitment}`;
-                }
-                const curationStats = curator.getDetails();
-                text += `\n\n---\n${curationStats}`;
-
+            // Notify if new high signals found and we have a chat
+            if (CHAT_ID && curator.memory.highSignals.length > 0) {
+                const latest = curator.memory.highSignals.slice(-3);
+                const text = `Background scan found signals:\n\n` +
+                    latest.map(s => `[${s.score}/10] ${s.title}`).join('\n');
                 await sendToTelegram(CHAT_ID, text);
             }
-
-            console.log('✅ Deep Cycle complete.');
         } catch (err) {
-            console.error('❌ Cycle error:', err.message);
+            console.error('Curator cycle failed:', err.message);
         }
-
-        console.log(`[Cycle] Sleeping for ${INTERVAL_MS / 1000 / 60} minutes...`);
-        await new Promise(resolve => setTimeout(resolve, INTERVAL_MS));
     }
 }
 
 startAutonomousAgent().catch(err => {
-    console.error('Fatal agent error:', err);
+    console.error('Fatal error:', err);
     process.exit(1);
 });
-

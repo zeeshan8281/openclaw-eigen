@@ -1,23 +1,24 @@
 const fs = require('fs');
 const path = require('path');
 const Parser = require('rss-parser');
-const { EigenAIService } = require('./services/eigenai');
 const { OpenRouterService } = require('./services/openrouter');
 
 const RSS_FEEDS = [
     'https://www.coindesk.com/arc/outboundfeeds/rss/',
     'https://cointelegraph.com/rss',
     'https://blog.ethereum.org/feed.xml',
-    'https://vitalik.ca/feed.xml'
+    'https://vitalik.ca/feed.xml',
+    'https://feeds.bbci.co.uk/news/technology/rss.xml',
+    'https://feeds.bbci.co.uk/news/business/rss.xml'
 ];
 
 const MEMORY_FILE = path.join(__dirname, '../data/curator_memory.json');
-const MAX_HISTORY = 200; // Only keep verify hash of last 200 items
+const MAX_HISTORY = 200;
+const SCORE_DELAY_MS = 2000; // 2s between LLM calls to avoid rate limits
 
 class Curator {
     constructor() {
         this.parser = new Parser();
-        this.eigenai = new EigenAIService();
         this.openrouter = new OpenRouterService();
         this.memory = this.loadMemory();
         this.isRunning = false;
@@ -25,6 +26,10 @@ class Curator {
 
     loadMemory() {
         try {
+            // Ensure data dir exists
+            const dir = path.dirname(MEMORY_FILE);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
             if (fs.existsSync(MEMORY_FILE)) {
                 return JSON.parse(fs.readFileSync(MEMORY_FILE, 'utf8'));
             }
@@ -36,7 +41,9 @@ class Curator {
 
     saveMemory() {
         try {
-            // Atomic write: write to temp then rename
+            const dir = path.dirname(MEMORY_FILE);
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+
             const tempFile = `${MEMORY_FILE}.tmp`;
             fs.writeFileSync(tempFile, JSON.stringify(this.memory, null, 2));
             fs.renameSync(tempFile, MEMORY_FILE);
@@ -49,11 +56,35 @@ class Curator {
         if (this.isRunning) return;
         this.isRunning = true;
 
-        console.log('🔍 [Curator] Starting curation cycle...');
+        console.log('[Curator] Starting cycle...');
 
         try {
+            // Collect all new items first
+            const newItems = [];
             for (const feedUrl of RSS_FEEDS) {
-                await this.processFeed(feedUrl);
+                const items = await this.fetchNewItems(feedUrl);
+                newItems.push(...items);
+            }
+
+            console.log(`[Curator] ${newItems.length} new items to score`);
+
+            // Batch score with delays to avoid rate limits
+            // Only score up to 10 items per cycle to stay within free tier
+            const toScore = newItems.slice(0, 10);
+            for (const item of toScore) {
+                await this.scoreItem(item);
+                // Mark as seen regardless of score result
+                const hash = Buffer.from(item.title).toString('base64');
+                this.memory.seenHashes.push(hash);
+                if (toScore.indexOf(item) < toScore.length - 1) {
+                    await new Promise(r => setTimeout(r, SCORE_DELAY_MS));
+                }
+            }
+
+            // Mark remaining items as seen (skip scoring to avoid rate limits)
+            for (const item of newItems.slice(10)) {
+                const hash = Buffer.from(item.title).toString('base64');
+                this.memory.seenHashes.push(hash);
             }
 
             // Prune memory
@@ -62,84 +93,61 @@ class Curator {
             }
 
             this.saveMemory();
-            console.log('✅ [Curator] Cycle complete.');
+            console.log('[Curator] Cycle complete.');
 
         } catch (err) {
-            console.error('⚠️ [Curator] Cycle failed (Recovering...):', err.message);
+            console.error('[Curator] Cycle failed:', err.message);
         } finally {
             this.isRunning = false;
         }
     }
 
-    async processFeed(url) {
+    async fetchNewItems(url) {
         try {
-            // Set a timeout for the feed parser
             const feed = await Promise.race([
                 this.parser.parseURL(url),
                 new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 10000))
             ]);
 
-            console.log(`📄 [Curator] Fetched ${feed.items.length} items from ${feed.title || url}`);
-
+            const newItems = [];
             for (const item of feed.items) {
-                // Simple hash of title to deduplicate
+                if (!item.title) continue;
                 const hash = Buffer.from(item.title).toString('base64');
-                if (this.memory.seenHashes.includes(hash)) continue;
-
-                // New item! Score it.
-                await this.scoreItem(item);
-
-                // Mark as seen
-                this.memory.seenHashes.push(hash);
+                if (!this.memory.seenHashes.includes(hash)) {
+                    newItems.push(item);
+                }
             }
-
+            console.log(`[Curator] ${feed.title || url}: ${newItems.length} new / ${feed.items.length} total`);
+            return newItems;
         } catch (err) {
-            console.warn(`⚠️ [Curator] Failed to process feed ${url}: ${err.message}`);
+            console.warn(`[Curator] Feed failed ${url}: ${err.message}`);
+            return [];
         }
     }
 
     async scoreItem(item) {
-        // Safe LLM call with strict timeout
         try {
-            // Prompt: "Rate importance 1-10. Output NUMBER ONLY."
-            const prompt = `Analyze this crypto news headline: "${item.title}".
-            Rate its importance to the crypto industry on a scale of 1-10.
-            1 = Spam/Noise. 10 = Critical Industry Event (e.g. ETF Approval, Hack >$100M).
-            Return ONLY the number.`;
+            const prompt = `Rate this crypto news headline 1-10. 1=spam, 10=critical event. Reply with ONLY the number.\n\n"${item.title}"`;
 
-            // Use OPENROUTER preferentially
-            let res;
-            if (this.openrouter.apiKey) {
-                res = await this.openrouter.chatCompletion("You are a strict news editor.", prompt, 10);
-            } else {
-                // Fallback to EigenAI
-                res = await this.eigenai.chatCompletion("You are a strict news editor.", prompt, 10);
-            }
-
-            const score = parseInt(res.content.replace(/\D/g, '')); // Extract number
+            const res = await this.openrouter.chatCompletion("You are a news editor. Reply with only a number.", prompt, 10);
+            const score = parseInt(res.content.replace(/\D/g, ''));
 
             if (!isNaN(score) && score >= 8) {
-                console.log(`🚨 [Curator] HIGH SIGNAL (${score}/10): ${item.title}`);
+                console.log(`[Curator] HIGH SIGNAL (${score}/10): ${item.title}`);
                 this.memory.highSignals.push({
                     title: item.title,
                     link: item.link,
-                    score: score,
+                    score,
                     timestamp: new Date().toISOString()
                 });
-                return true; // Signal found!
-            } else {
-                // console.log(`[Curator] Low signal (${score}/10): ${item.title}`);
             }
-
         } catch (err) {
-            // Logic error in LLM or parsing? Don't crash. Just ignore item.
-            console.warn(`[Curator] Scoring failed for item "${item.title.substring(0, 20)}...": ${err.message}`);
+            console.warn(`[Curator] Score failed: ${err.message}`);
         }
-        return false;
     }
 
     getDetails() {
-        return `🧠 **Curator Memory:**\n- Tracking ${RSS_FEEDS.length} Feeds\n- Seen ${this.memory.seenHashes.length} items\n- Found ${this.memory.highSignals.length} Active Signals`;
+        return `Curator: ${RSS_FEEDS.length} feeds, ${this.memory.seenHashes.length} seen, ${this.memory.highSignals.length} signals`;
     }
 }
 
