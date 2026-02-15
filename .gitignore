@@ -2,14 +2,60 @@ node_modules
 .env
 .env.*
 .DS_Store
-output/
-.openclaw/
 *.bak
 *.bak.*
+
+# Local data / state
+output/
 data/
 public/
+
+# OpenClaw local config
+.openclaw/
+
+# Claude Code workspace
+.claude/
+
+# OpenClaw repo (cloned for reference)
+openclaw_repo/
+
+# Legacy files (kept locally, not tracked)
 autonomous-agent/
 autonomous-website/
 ollama-proxy.js
 alfred-bot.js
 package-lock.json
+config/
+skills/
+skills-deploy/
+openclaw-skills/
+Dockerfile.eigencompute
+Dockerfile.openclaw
+docker-compose.yml
+implementation_plan.md
+BOOTSTRAP.md
+DEPLOY_EIGENCLOUD.md
+DEPLOY_FINAL.md
+EIGEN_DX_REPORT.md
+HEARTBEAT.md
+IDENTITY.md
+TOOLS.md
+USER.md
+eigenai-proxy.js
+fix_delegation.js
+index.js
+server.js
+smoke.js
+start.sh
+deploy.sh
+test-remote*.js
+verify.js
+
+# Dead src files (legacy, not imported)
+src/debug-entry.js
+src/health-check.js
+src/news-cron.js
+src/pipeline.js
+src/scheduler.js
+src/services/ollama.js
+src/telegram-gateway.js

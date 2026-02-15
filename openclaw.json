@@ -1,7 +1,44 @@
 {
+    "models": {
+        "providers": {
+            "openrouter": {
+                "baseUrl": "https://openrouter.ai/api/v1",
+                "api": "openai-completions",
+                "models": [
+                    {
+                        "id": "nvidia/nemotron-nano-9b-v2:free",
+                        "name": "Nemotron 9B"
+                    }
+                ]
+            }
+        }
+    },
+    "agents": {
+        "defaults": {
+            "model": {
+                "primary": "openrouter/nvidia/nemotron-nano-9b-v2:free"
+            },
+            "compaction": {
+                "mode": "safeguard"
+            },
+            "maxConcurrent": 2
+        }
+    },
+    "channels": {
+        "telegram": {
+            "enabled": true,
+            "name": "Alfred",
+            "dmPolicy": "open",
+            "allowFrom": ["*"]
+        }
+    },
+    "tools": {
+        "deny": ["group:web"]
+    },
     "gateway": {
         "port": 3000,
         "bind": "lan",
+        "mode": "local",
         "auth": {
             "mode": "token",
             "token": "eigen123"
