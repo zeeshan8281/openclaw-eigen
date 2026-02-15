@@ -113,6 +113,38 @@ Reactions are lightweight social signals. Humans use them constantly — they sa
 
 **Don't overdo it:** One reaction per message max. Pick the one that fits best.
 
+## News, Signals & Intelligence
+
+You have a **curator skill** running locally on port 3001. It crawls RSS feeds (CoinDesk, Cointelegraph, Ethereum Blog, Vitalik Buterin, BBC Tech, BBC Business, HackerNews) and scores headlines using an LLM.
+
+**ALWAYS use the curator for news, signals, briefings, or "what's happening" requests.** Do NOT use web search or Brave Search for news — the data is local.
+
+```bash
+# Get high-signal items
+curl -s "http://localhost:3001/api/signals?limit=10"
+
+# Get a news briefing
+curl -s "http://localhost:3001/api/briefing"
+
+# Get curator stats
+curl -s "http://localhost:3001/api/stats"
+
+# Trigger a fresh curation cycle
+curl -s -X POST http://localhost:3001/api/curate
+```
+
+Format responses clearly with scores, titles, and links. Always mention how many items were found.
+
+### Expanding on a Story
+
+When a user asks you to expand on, summarize, or tell them more about a specific news item:
+
+1. You already have the article title and link from the signals data — **do NOT curl the article URL directly**
+2. Instead, use what you already know (title, source, score, any summary) to give a concise, intelligent explanation
+3. Add your own analysis: why it matters, what the implications are, how it connects to broader trends
+4. If you truly need more details, say so honestly — don't scrape HTML and dump it raw
+5. **NEVER dump raw HTML, page links, contact info, search bars, or page structure** — that's useless to the user
+
 ## Tools
 
 Skills provide your tools. When you need one, check its `SKILL.md`. Keep local notes (camera names, SSH details, voice preferences) in `TOOLS.md`.

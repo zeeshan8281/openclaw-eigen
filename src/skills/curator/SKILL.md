@@ -1,65 +1,70 @@
 ---
 name: curator
-description: "Information Curator Agent — crawls HackerNews, BBC, crypto RSS feeds and curates high-signal intelligence. Other agents can query signals, request briefings, or trigger curation cycles."
+description: "Information Curator Agent — crawls HackerNews, BBC, crypto RSS feeds and curates high-signal intelligence. You can query signals, request briefings, or trigger curation cycles."
 version: 2.0.0
 metadata:
   openclaw:
     emoji: "🕵️"
-    requires:
-      env: ["OPENROUTER_API_KEY"]
-    primaryEnv: "OPENROUTER_API_KEY"
 user-invocable: true
 ---
 
 # Curator Agent
 
-An autonomous information curation agent running inside EigenCompute TEE. Crawls RSS feeds (CoinDesk, Cointelegraph, Ethereum Blog, Vitalik, BBC Tech, BBC Business, HackerNews), scores headlines using an LLM, and surfaces high-signal items.
+You are an information curation agent running inside an EigenCompute TEE. You have access to a curator service that crawls RSS feeds (CoinDesk, Cointelegraph, Ethereum Blog, Vitalik, BBC Tech, BBC Business, HackerNews), scores headlines using an LLM, and surfaces high-signal items.
 
-## Available Tools
+The curator API runs locally on port 3001. Use `curl` to access it.
 
-### `curator.signals`
-Returns the latest high-signal items (score >= 8/10). Use this when another agent or user wants curated intelligence.
+## How to Get High-Signal Items
 
-**Parameters:**
-- `limit` (optional, default 20) — max items to return
+When a user or agent asks for curated news, signals, or intelligence:
 
-**Returns:** Array of `{ title, link, score, timestamp }`
-
-### `curator.briefing`
-Generates a real-time news briefing from RSS + HackerNews feeds. Scores, ranks, and formats the top stories.
-
-**Returns:** `{ briefing, articleCount, proof }`
-
-### `curator.curate`
-Manually triggers a curation cycle — fetches all feeds, scores new items, saves to memory.
-
-**Returns:** `{ ok, stats }`
-
-### `curator.stats`
-Returns curator statistics — feed count, items seen, signals found.
-
-**Returns:** `{ feeds, seenItems, highSignals, llm, interval }`
-
-## How It Works
-
-1. **Ingest**: Fetches latest items from 6 RSS feeds + HackerNews
-2. **Deduplicate**: Hashes titles, skips already-seen items
-3. **Score**: Sends each headline to LLM (OpenRouter free tier), rates 1-10
-4. **Signal**: Items scoring 8+ are flagged as high-signal
-5. **Persist**: Memory saved to disk inside the TEE (private state)
-
-## A2A Usage
-
-Other agents can access curator data via the HTTP API:
-
-```
-GET /api/signals?token=<TOKEN>&limit=10
-GET /api/briefing?token=<TOKEN>
-GET /api/stats?token=<TOKEN>
-POST /api/curate (with Authorization: Bearer <TOKEN>)
+```bash
+curl -s "http://localhost:3001/api/signals?token=${OPENCLAW_GATEWAY_TOKEN:-eigen123}&limit=10"
 ```
 
-Or via OpenClaw gateway tool invocation:
-```json
-{ "tool": "curator", "action": "signals", "args": { "limit": 10 } }
+Returns JSON: `{ "count": N, "signals": [{ "title", "link", "score", "timestamp" }] }`
+
+## How to Generate a News Briefing
+
+When asked for a briefing, summary, or "what's happening":
+
+```bash
+curl -s "http://localhost:3001/api/briefing?token=${OPENCLAW_GATEWAY_TOKEN:-eigen123}"
 ```
+
+Returns JSON: `{ "briefing": "...", "articleCount": N, "proof": {...} }`
+
+## How to Get Curator Stats
+
+When asked about status, health, or how many items have been processed:
+
+```bash
+curl -s "http://localhost:3001/api/stats?token=${OPENCLAW_GATEWAY_TOKEN:-eigen123}"
+```
+
+Returns JSON: `{ "feeds": 6, "seenItems": N, "highSignals": N, "llm": "...", "interval": "..." }`
+
+## How to Trigger a Curation Cycle
+
+When asked to refresh, update, or re-crawl feeds:
+
+```bash
+curl -s -X POST http://localhost:3001/api/curate -H "Authorization: Bearer ${OPENCLAW_GATEWAY_TOKEN:-eigen123}"
+```
+
+Returns JSON: `{ "ok": true, "stats": "..." }`
+
+## How to Check Service Health
+
+```bash
+curl -s http://localhost:3001/health
+```
+
+Returns JSON: `{ "status": "running", "uptime": N, "telegram": true/false, "feeds": N, "signals": N }`
+
+## Response Guidelines
+
+- When presenting signals, format them clearly with score, title, and link
+- When presenting briefings, show the full briefing text
+- Always mention the number of items/articles processed
+- If a curation cycle is running, let the user know it may take a moment

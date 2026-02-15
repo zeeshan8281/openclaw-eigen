@@ -13,12 +13,40 @@ echo "[Debug] OpenClaw: $(npx openclaw --version 2>/dev/null || echo 'not found'
 
 cd /app
 
-# 1. Launch the autonomous agent (Telegram bot + Express API) in background
-echo "[Start] Launching autonomous agent..."
+# Inject secrets into OpenClaw config at runtime
+echo "[Config] Injecting runtime secrets into OpenClaw config..."
+node -e "
+    const fs = require('fs');
+    const cfg = JSON.parse(fs.readFileSync('/root/.openclaw/openclaw.json', 'utf8'));
+
+    // Inject OpenRouter API key
+    if (process.env.OPENROUTER_API_KEY) {
+        if (cfg.models && cfg.models.providers && cfg.models.providers.openrouter) {
+            cfg.models.providers.openrouter.apiKey = process.env.OPENROUTER_API_KEY;
+            console.log('[Config] Injected OpenRouter API key');
+        }
+    }
+
+    // Inject Telegram bot token
+    if (process.env.TELEGRAM_BOT_TOKEN) {
+        if (cfg.channels && cfg.channels.telegram) {
+            cfg.channels.telegram.botToken = process.env.TELEGRAM_BOT_TOKEN;
+            console.log('[Config] Injected Telegram bot token');
+        }
+    }
+
+    fs.writeFileSync('/root/.openclaw/openclaw.json', JSON.stringify(cfg, null, 2));
+"
+
+# Ensure gateway token is exported for both processes
+export OPENCLAW_GATEWAY_TOKEN="${OPENCLAW_GATEWAY_TOKEN:-eigen123}"
+
+# 1. Launch the autonomous agent (Express API + curator loop) in background
+echo "[Start] Launching curator API on port 3001..."
 node src/autonomous.js &
 AGENT_PID=$!
 
-# 2. Launch OpenClaw gateway in foreground (A2A discovery on port 3000)
+# 2. Launch OpenClaw gateway (agent + Telegram + A2A on port 3000)
 echo "[Start] Launching OpenClaw gateway on port 3000..."
 npx openclaw gateway --allow-unconfigured --bind lan --verbose &
 GATEWAY_PID=$!

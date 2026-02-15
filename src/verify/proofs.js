@@ -6,6 +6,7 @@
  */
 
 const { EigenDAService } = require('../services/eigenda');
+const { getAttestation } = require('../services/tee-attestation');
 const crypto = require('crypto');
 
 let eigenda = null;
@@ -21,11 +22,19 @@ function getEigenDA() {
  * @returns {Promise<{commitment: string|null, hash: string}>}
  */
 async function storeProof(data) {
+    const attestation = getAttestation();
     const payload = {
         type: 'news-briefing',
         version: 1,
         timestamp: new Date().toISOString(),
         contentHash: crypto.createHash('sha256').update(JSON.stringify(data)).digest('hex'),
+        teeAttestation: {
+            appId: attestation.appId,
+            platform: attestation.platform,
+            imageDigest: attestation.imageDigest,
+            configHash: attestation.configHash,
+            kmsKeyFingerprint: attestation.kmsKeyFingerprint
+        },
         ...data
     };
 
