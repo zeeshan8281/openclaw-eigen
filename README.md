@@ -2,7 +2,7 @@
 
 An autonomous AI agent running inside an [EigenCompute TEE](https://eigencloud.xyz) (Intel TDX). Crawls RSS feeds, HackerNews, and Twitter/X for crypto, tech, and business news — scores headlines with AI — and sells access to other agents via on-chain Sepolia ETH payments. Every response includes cryptographic TEE attestation proving the curation is untampered.
 
-Accessible via **Telegram** ("Alfred"), **REST API**, **A2A protocol**, and **wallet-gated premium access**.
+Built on [OpenClaw](https://openclaw.dev) for agent orchestration, Telegram integration, and A2A protocol support. Accessible via **Telegram** ("Alfred"), **REST API**, **OpenClaw A2A gateway**, and **wallet-gated premium access**.
 
 ## What It Does
 
@@ -25,7 +25,7 @@ Alfred runs 24/7 inside a TEE, autonomously curating intelligence:
 |  | (port 3001)       |  | (port 3000)          |   |
 |  |                   |  |                      |   |
 |  | - REST API        |  | - Telegram "Alfred"  |   |
-|  | - A2A endpoint    |  | - A2A discovery      |   |
+|  | - A2A endpoint    |  | - OpenClaw A2A       |   |
 |  | - Payment gate    |  | - Curator skill      |   |
 |  | - TEE attestation |  |                      |   |
 |  +--------+----------+  +----------+-----------+   |
@@ -156,6 +156,17 @@ Every API response includes cryptographic proof that the curation ran inside a g
   }
 }
 ```
+
+## OpenClaw Integration
+
+Alfred uses [OpenClaw](https://openclaw.dev) as the agent framework:
+
+- **Gateway** on port 3000 handles Telegram messaging, agent identity, and A2A protocol
+- **Curator skill** (`src/skills/curator/`) exposes curation actions to the OpenClaw A2A registry
+- **Config** at `openclaw.json` — model routing (OpenRouter), Telegram channel, tool permissions
+- **Agent instructions** in `AGENTS.md` + personality in `SOUL.md` — loaded by OpenClaw at startup
+
+The OpenClaw gateway and the curator service (`autonomous.js`) run as two processes inside the TEE, communicating over localhost.
 
 ## Setup
 
