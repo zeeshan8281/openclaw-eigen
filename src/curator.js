@@ -1,7 +1,10 @@
 const fs = require('fs');
 const path = require('path');
+const axios = require('axios');
 const Parser = require('rss-parser');
 const { OpenRouterService } = require('./services/openrouter');
+
+const X_BEARER_TOKEN = process.env.X_BEARER_TOKEN;
 
 const RSS_FEEDS = [
     'https://www.coindesk.com/arc/outboundfeeds/rss/',
@@ -68,6 +71,10 @@ class Curator {
                 newItems.push(...items);
             }
 
+            // Fetch Twitter items
+            const twitterItems = await this.fetchTwitterItems();
+            newItems.push(...twitterItems);
+
             console.log(`[Curator] ${newItems.length} new items to score`);
 
             // Score items with delays to avoid rate limits
@@ -129,6 +136,49 @@ class Curator {
         }
     }
 
+    async fetchTwitterItems() {
+        if (!X_BEARER_TOKEN) {
+            console.log('[Curator] Twitter: no X_BEARER_TOKEN set, skipping');
+            return [];
+        }
+        try {
+            const res = await axios.get('https://api.x.com/2/tweets/search/recent', {
+                headers: { Authorization: `Bearer ${X_BEARER_TOKEN}` },
+                params: {
+                    query: '(bitcoin OR ethereum OR crypto OR AI) -is:retweet -is:reply lang:en',
+                    max_results: 10,
+                    'tweet.fields': 'author_id,created_at',
+                    expansions: 'author_id'
+                },
+                timeout: 10000
+            });
+
+            const tweets = res.data?.data || [];
+            const users = {};
+            for (const u of (res.data?.includes?.users || [])) {
+                users[u.id] = u.username;
+            }
+
+            const newItems = [];
+            for (const tweet of tweets) {
+                const hash = Buffer.from(tweet.text).toString('base64');
+                if (this.memory.seenHashes.includes(hash)) continue;
+                const username = users[tweet.author_id] || tweet.author_id;
+                newItems.push({
+                    title: tweet.text,
+                    link: `https://x.com/${username}/status/${tweet.id}`,
+                    creator: `@${username}`
+                });
+            }
+
+            console.log(`[Curator] Twitter: ${newItems.length} new / ${tweets.length} total`);
+            return newItems;
+        } catch (err) {
+            console.warn(`[Curator] Twitter fetch failed: ${err.message}`);
+            return [];
+        }
+    }
+
     async scoreItem(item) {
         let score = this.keywordScore(item.title);
 
@@ -186,7 +236,7 @@ class Curator {
     }
 
     getDetails() {
-        return `Curator: ${RSS_FEEDS.length} feeds, ${this.memory.seenHashes.length} seen, ${this.memory.highSignals.length} signals`;
+        return `Curator: ${RSS_FEEDS.length} RSS feeds + Twitter, ${this.memory.seenHashes.length} seen, ${this.memory.highSignals.length} signals`;
     }
 }
 

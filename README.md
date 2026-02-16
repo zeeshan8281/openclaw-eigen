@@ -1,122 +1,160 @@
-# OpenCLAW-Eigen: Autonomous Information Curator in a TEE
+# Alfred: Autonomous Intelligence Curator with Agent-to-Agent Payments
 
-An autonomous AI agent running inside an [EigenCompute TEE](https://eigencloud.xyz) (Intel TDX). Crawls RSS feeds from crypto, tech, and business sources, scores headlines using an LLM, and surfaces high-signal intelligence with cryptographic attestation — proving every curation happened in a trusted enclave.
+An autonomous AI agent running inside an [EigenCompute TEE](https://eigencloud.xyz) (Intel TDX). Crawls RSS feeds, HackerNews, and Twitter/X for crypto, tech, and business news — scores headlines with AI — and sells access to other agents via on-chain Sepolia ETH payments. Every response includes cryptographic TEE attestation proving the curation is untampered.
 
-Accessible via **Telegram** (as "Alfred"), **REST API**, and **OpenClaw A2A gateway**.
+Accessible via **Telegram** ("Alfred"), **REST API**, **A2A protocol**, and **wallet-gated premium access**.
 
-## What Does This App Do
+## What It Does
 
-OpenCLAW-Eigen is an autonomous information curation agent that runs 24/7 inside an Intel TDX Trusted Execution Environment on EigenCompute infrastructure. Every 4 hours, it automatically crawls 7 data sources — CoinDesk, Cointelegraph, Ethereum Blog, Vitalik Buterin's blog, BBC Technology, BBC Business, and HackerNews — pulling the latest articles via RSS feeds and the HackerNews API. Each headline is deduplicated against a persistent in-memory store (hashed by title to avoid re-processing), then sent individually to an LLM (NVIDIA Nemotron 9B via OpenRouter's free tier) which scores it from 1-10 based on significance, novelty, and relevance to crypto, tech, and macro trends. Articles scoring 8 or above are flagged as "high-signal intelligence" and stored for retrieval. The agent processes up to 10 articles per cycle with a 2-second delay between LLM calls to respect rate limits.
+Alfred runs 24/7 inside a TEE, autonomously curating intelligence:
 
-On the consumer side, the agent exposes its curated data through three interfaces. First, a **Telegram bot named Alfred** that users can message directly — ask "what's happening in crypto?" and it fetches the latest signals from the internal curator API, formats them with scores and links, and replies conversationally. Users can also ask Alfred to expand on specific stories, and it provides analysis and context rather than raw data. Second, a **REST API on port 3001** with endpoints for querying high-signal items (`/api/signals`), generating real-time LLM-powered news briefings (`/api/briefing`), viewing curator statistics (`/api/stats`), and manually triggering curation cycles (`/api/curate`). Third, an **OpenClaw A2A gateway on port 3000** that exposes the curator as a discoverable skill, allowing other autonomous agents to programmatically query signals, request briefings, and trigger curation through the Agent-to-Agent protocol.
-
-What makes this different from a standard news aggregator is the **TEE attestation layer**. Because the entire application runs inside an Intel TDX enclave on EigenCompute, every API response includes a cryptographic attestation object containing the KMS signing key fingerprint (proving the enclave is genuine), a SHA-256 hash of the agent's configuration files (proving the curation logic hasn't been tampered with), and platform metadata. When briefings are generated, this attestation data is also embedded into EigenDA proof payloads, creating an on-chain verifiable record that a specific piece of curated intelligence was produced by a specific, untampered version of the agent running inside a real TEE — not by a compromised server or a human pretending to be an AI. This positions the agent as a **trustworthy data source for other agents and protocols** that need verifiable, machine-generated intelligence.
+1. **Crawls** 8 data sources every 4 hours (CoinDesk, Cointelegraph, Ethereum Blog, Vitalik.ca, BBC Tech, BBC Business, HackerNews, Twitter/X)
+2. **Scores** each headline 1-10 using an LLM (significance, novelty, relevance to crypto/tech/macro)
+3. **Stores** scored signals with timestamps and source attribution
+4. **Sells** premium access (signals, briefings) to users and agents via Sepolia ETH payments
+5. **Attests** every response with TEE proof (KMS key, config hash, platform metadata)
 
 ## Architecture
 
 ```
-+------------------------------------------------+
-|          EigenCompute TEE (Intel TDX)          |
-|                                                |
-|  +-----------------+  +--------------------+   |
-|  | Curator Service  |  | OpenClaw Gateway   |   |
-|  | (port 3001)      |  | (port 3000)        |   |
-|  |                  |  |                    |   |
-|  | - REST API       |  | - Telegram "Alfred"|   |
-|  | - Curation Loop  |  | - A2A Protocol     |   |
-|  | - TEE Attestation|  | - Curator Skill    |   |
-|  +--------+---------+  +---------+----------+   |
-|           |                      |               |
-|           +----------+-----------+               |
-|                      |                           |
-|              +-------+--------+                  |
-|              |    Curator     |                  |
-|              | RSS + LLM     |                  |
-|              | Score + Store  |                  |
-|              +----------------+                  |
-+------------------------------------------------+
++---------------------------------------------------+
+|           EigenCompute TEE (Intel TDX)             |
+|                                                    |
+|  +------------------+  +----------------------+   |
+|  | Curator Service   |  | OpenClaw Gateway     |   |
+|  | (port 3001)       |  | (port 3000)          |   |
+|  |                   |  |                      |   |
+|  | - REST API        |  | - Telegram "Alfred"  |   |
+|  | - A2A endpoint    |  | - A2A discovery      |   |
+|  | - Payment gate    |  | - Curator skill      |   |
+|  | - TEE attestation |  |                      |   |
+|  +--------+----------+  +----------+-----------+   |
+|           |                        |               |
+|     +-----+------------------------+-----+         |
+|     |           Curator Engine           |         |
+|     |  RSS + Twitter + LLM scoring       |         |
+|     |  On-chain payment verification     |         |
+|     +------------------------------------+         |
++---------------------------------------------------+
 ```
 
-| Process | Port | Purpose |
-|---------|------|---------|
-| `autonomous.js` | 3001 | REST API, background curation loop, TEE attestation |
-| OpenClaw Gateway | 3000 | Telegram bot ("Alfred"), A2A discovery, Control UI |
+## Agent-to-Agent Payment Flow
+
+Other AI agents can discover Alfred, pay for access, and consume intelligence — fully autonomous, no human in the loop.
+
+```
+Agent B                                    Alfred (TEE)
+  |                                           |
+  |  GET /.well-known/agent.json              |
+  |------------------------------------------>|
+  |  { skills, payment: { recipient, amount }}|
+  |<------------------------------------------|
+  |                                           |
+  |  POST /a2a  { skill: "signals" }          |
+  |------------------------------------------>|
+  |  { status: "payment-required" }           |
+  |<------------------------------------------|
+  |                                           |
+  |  === Send 0.001 ETH on Sepolia ===        |
+  |  (agent's wallet → Alfred's wallet)       |
+  |                                           |
+  |  POST /a2a  { skill: "signals",           |
+  |               txHash: "0xabc..." }        |
+  |------------------------------------------>|
+  |  { status: "completed",                   |
+  |    data: { signals: [...] } }             |
+  |<------------------------------------------|
+```
+
+### Test the A2A Flow
+
+```bash
+# Simulate Agent B (needs a wallet with Sepolia ETH)
+AGENT_PRIVATE_KEY=0x... node test-a2a.js
+```
+
+The test script runs the full cycle: discover → request → get payment-required → pay on-chain → retry with tx hash → receive signals.
 
 ## Data Sources
 
-| Source | Type |
-|--------|------|
-| CoinDesk | Crypto market news |
-| Cointelegraph | Crypto industry |
-| Ethereum Blog | Protocol updates |
-| Vitalik.ca | Ethereum thought leadership |
-| BBC Technology | Global tech |
-| BBC Business | Global business |
-| HackerNews | Top tech stories |
+| Source | Type | Method |
+|--------|------|--------|
+| CoinDesk | Crypto markets | RSS |
+| Cointelegraph | Crypto industry | RSS |
+| Ethereum Blog | Protocol updates | RSS |
+| Vitalik.ca | Ethereum thought leadership | RSS |
+| BBC Technology | Global tech | RSS |
+| BBC Business | Global business | RSS |
+| HackerNews | Top tech stories | RSS |
+| Twitter/X | Crypto/AI tweets | API v2 |
 
-## How It Works
+## REST API
 
-1. **Ingest** — Fetches latest items from 6 RSS feeds + HackerNews
-2. **Deduplicate** — Hashes titles, skips already-seen items
-3. **Score** — Sends each headline to an LLM (OpenRouter), rates 1-10
-4. **Signal** — Items scoring 8+ are flagged as high-signal intelligence
-5. **Attest** — Every API response includes TEE attestation (KMS key fingerprint, config hash, platform proof)
-6. **Prove** — Briefings are stored on EigenDA with TEE context for on-chain verifiability
+Port 3001. Premium endpoints require on-chain payment or token auth. Localhost bypasses auth.
+
+| Method | Endpoint | Auth | Description |
+|--------|----------|------|-------------|
+| GET | `/health` | None | Service health + TEE attestation |
+| GET | `/.well-known/agent.json` | None | A2A agent card (capabilities + payment info) |
+| POST | `/a2a` | Payment | A2A task endpoint (JSON-RPC) |
+| GET | `/api/signals` | Payment | AI-scored news signals |
+| GET | `/api/briefing` | Payment | LLM-generated news briefing |
+| GET | `/api/stats` | Token | Curator statistics |
+| POST | `/api/curate` | Token | Trigger curation cycle |
+| GET | `/api/auth/nonce` | None | Get sign-in nonce for wallet auth |
+| POST | `/api/auth/verify` | None | Verify wallet signature, get session |
+| GET | `/api/auth/status` | Session | Check/verify payment status |
+
+### Payment Authentication
+
+**For agents (A2A):**
+```bash
+# 1. Discover payment info
+curl localhost:3001/.well-known/agent.json
+
+# 2. Request signals (get payment-required)
+curl -X POST localhost:3001/a2a \
+  -H "Content-Type: application/json" \
+  -d '{"method":"tasks/send","params":{"task":{"skill":"signals"}}}'
+
+# 3. After sending ETH, retry with tx hash
+curl -X POST localhost:3001/a2a \
+  -H "Content-Type: application/json" \
+  -d '{"method":"tasks/send","params":{"task":{"skill":"signals","input":{"txHash":"0x..."}}}}'
+```
+
+**For users (wallet sign-in):**
+```bash
+# 1. Get nonce
+curl "localhost:3001/api/auth/nonce?address=0xYOUR_WALLET"
+
+# 2. Sign the message with your wallet, then verify
+curl -X POST localhost:3001/api/auth/verify \
+  -H "Content-Type: application/json" \
+  -d '{"address":"0x...","signature":"0x..."}'
+
+# 3. After sending ETH, verify payment
+curl "localhost:3001/api/auth/status?txHash=0x..." \
+  -H "x-session-token: YOUR_TOKEN"
+
+# 4. Access premium data
+curl localhost:3001/api/signals -H "x-session-token: YOUR_TOKEN"
+```
 
 ## TEE Attestation
 
-Every API response includes an `attestation` object proving the curation ran inside a real TEE:
+Every API response includes cryptographic proof that the curation ran inside a genuine TEE:
 
 ```json
 {
   "attestation": {
-    "appId": "0x6e6136...",
+    "appId": "0x92667e...",
     "platform": "Intel TDX (EigenCompute)",
     "configHash": "sha256:...",
     "kmsKeyFingerprint": "sha256:...",
-    "imageDigest": "sha256:...",
-    "nodeVersion": "v22.22.0",
-    "uptimeSeconds": 3600
+    "imageDigest": "sha256:..."
   }
 }
-```
-
-- **configHash** — SHA-256 of workspace config files (AGENTS.md, SOUL.md, openclaw.json), proving config integrity
-- **kmsKeyFingerprint** — Hash of the TEE's KMS signing public key, proving it's a real EigenCompute enclave
-- **imageDigest** — Docker image hash, proving which code is running
-
-## REST API
-
-All endpoints on port 3001. External requests require `?token=<TOKEN>` or `Authorization: Bearer <TOKEN>`. Localhost requests (from OpenClaw gateway) bypass auth.
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| GET | `/health` | No | Service health, uptime, attestation |
-| GET | `/api/signals` | Yes | High-signal items (query: `limit`) |
-| GET | `/api/briefing` | Yes | Generate LLM news briefing |
-| GET | `/api/stats` | Yes | Curator statistics |
-| POST | `/api/curate` | Yes | Trigger curation cycle |
-
-## Telegram (Alfred)
-
-Send any message to Alfred on Telegram. Ask for news, signals, briefings, or just chat. Built-in commands:
-
-| Command | Description |
-|---------|-------------|
-| `/start` | Initialize bot, auto-detect chat ID |
-| `/news` | Real-time news briefing |
-| `/curate` | Trigger RSS curation cycle |
-| `/signals` | Latest high-signal items |
-
-## OpenClaw A2A
-
-The gateway on port 3000 exposes the curator as a skill for agent-to-agent communication:
-
-```json
-{ "tool": "curator", "action": "signals", "args": { "limit": 10 } }
-{ "tool": "curator", "action": "briefing" }
-{ "tool": "curator", "action": "curate" }
-{ "tool": "curator", "action": "stats" }
 ```
 
 ## Setup
@@ -124,30 +162,37 @@ The gateway on port 3000 exposes the curator as a skill for agent-to-agent commu
 ### Environment Variables
 
 ```env
-TELEGRAM_BOT_TOKEN=your-bot-token
+# Required
 OPENROUTER_API_KEY=sk-or-...
-OPENROUTER_MODEL=nvidia/nemotron-nano-9b-v2:free
+TELEGRAM_BOT_TOKEN=your-bot-token
 OPENCLAW_GATEWAY_TOKEN=your-token
 WALLET_PRIVATE_KEY=your-private-key
 WALLET_ADDRESS=0x...
-CRON_INTERVAL=14400000
+
+# Payments (Sepolia)
+PAYMENT_WALLET=0x...          # EOA to receive payments
+MIN_PAYMENT_ETH=0.001         # Minimum payment amount
+SEPOLIA_RPC=https://ethereum-sepolia-rpc.publicnode.com
+
+# Twitter/X (optional)
+X_BEARER_TOKEN=your-bearer-token
+
+# Scoring LLM
+OPENROUTER_MODEL=nvidia/nemotron-nano-9b-v2:free
 ```
 
 ### Local Development
 
 ```bash
 npm install
-node src/autonomous.js
+node src/autonomous.js        # Starts API on port 3001
 ```
 
 ### Deploy to EigenCompute
 
 ```bash
-# Build for amd64 (TEE target)
-docker build --platform linux/amd64 -t youruser/eigen-openclaw:latest .
-docker push youruser/eigen-openclaw:latest
-
-# Deploy (interactive prompts)
+docker build --platform linux/amd64 --no-cache -t zeeshan8281/eigen-openclaw:latest .
+docker push zeeshan8281/eigen-openclaw:latest
 npx @layr-labs/ecloud-cli compute app deploy
 ```
 
@@ -155,42 +200,32 @@ npx @layr-labs/ecloud-cli compute app deploy
 
 ```
 src/
-  autonomous.js              # Entry point — Express API + curation loop
-  curator.js                 # RSS crawler + LLM headline scoring
-  news-cycle.js              # Orchestrator: ingest → score → briefing → proof
+  autonomous.js              # Express API + A2A endpoint + curation loop
+  curator.js                 # RSS/Twitter crawler + LLM headline scoring
+  news-cycle.js              # Orchestrator: ingest -> score -> briefing -> proof
   services/
+    payments.js              # Wallet auth + on-chain Sepolia payment verification
     openrouter.js            # OpenRouter LLM client (retry on 429/502/503)
-    tee-attestation.js       # TEE attestation data collector (cached at startup)
+    tee-attestation.js       # TEE attestation data collector
     eigenai.js               # EigenAI wallet-signed auth
     eigenda.js               # EigenDA proof storage
-  ingest/
-    aggregator.js            # RSS feed aggregator
-    rss.js                   # RSS parser
-    hn.js                    # HackerNews client
-  filter/
-    scorer.js                # LLM headline scoring (1-10)
-  summarize/
-    briefing.js              # LLM briefing generation
-  verify/
-    proofs.js                # EigenDA proof storage + TEE attestation
   skills/
     curator/                 # OpenClaw A2A skill wrapper
       index.js
       SKILL.md
-      package.json
-AGENTS.md                    # Agent behavior instructions
+AGENTS.md                    # Agent behavior + payment flow instructions
 SOUL.md                      # Agent identity/personality
-Dockerfile                   # Production container (Node 22 + OpenClaw)
-entrypoint.sh                # TEE startup: unseal secrets, run both processes
+test-a2a.js                  # A2A payment flow test script
+Dockerfile                   # Production container
+entrypoint.sh                # TEE startup script
 openclaw.json                # OpenClaw gateway config
-EIGENCOMPUTE-DX-FEEDBACK.md  # Developer experience feedback for EigenCompute
 ```
 
 ## Current Deployment
 
-- **App ID:** `0x6e6136bd0FCfaa87E59aAb04110854Ff5e8E7961`
+- **App ID:** `0x92667e876EEC36a06B3f25EA0547592e72c87010`
 - **Platform:** Intel TDX (EigenCompute)
-- **Dashboard:** [verify-sepolia.eigencloud.xyz](https://verify-sepolia.eigencloud.xyz/app/0x6e6136bd0FCfaa87E59aAb04110854Ff5e8E7961)
+- **Dashboard:** [verify-sepolia.eigencloud.xyz](https://verify-sepolia.eigencloud.xyz/app/0x92667e876EEC36a06B3f25EA0547592e72c87010)
 
 ## License
 

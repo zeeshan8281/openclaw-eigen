@@ -3,10 +3,15 @@ const express = require('express');
 const { getAttestation } = require('./services/tee-attestation');
 require('dotenv').config();
 
+const PaymentService = require('./services/payments');
+
 // Configuration
 const INTERVAL_MS = parseInt(process.env.CRON_INTERVAL, 10) || 4 * 60 * 60 * 1000;
 const API_PORT = parseInt(process.env.PORT, 10) || 3001;
 const API_TOKEN = process.env.OPENCLAW_GATEWAY_TOKEN || null;
+
+// Payment service
+const payments = new PaymentService();
 
 // ─────────────────────────────────────────────────
 // Curator
@@ -17,7 +22,9 @@ const curator = new Curator();
 // ─────────────────────────────────────────────────
 // Express API (accessed by OpenClaw via curl)
 // ─────────────────────────────────────────────────
+const cors = require('cors');
 const app = express();
+app.use(cors());
 app.use(express.json());
 
 // Simple token auth middleware
@@ -31,6 +38,204 @@ function authMiddleware(req, res, next) {
     next();
 }
 
+// Wallet-payment auth middleware (for premium endpoints)
+function paidMiddleware(req, res, next) {
+    // Localhost bypass (container-internal)
+    const ip = req.ip || req.connection?.remoteAddress || '';
+    if (ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1') return next();
+    // Legacy token auth still works
+    const legacyToken = req.headers.authorization?.replace('Bearer ', '') || req.query.token;
+    if (API_TOKEN && legacyToken === API_TOKEN) return next();
+    // Wallet session auth
+    const sessionToken = req.headers['x-session-token'];
+    if (!sessionToken) return res.status(401).json({ error: 'Unauthorized — use token auth or wallet sign-in' });
+    const session = payments.getSession(sessionToken);
+    if (!session) return res.status(401).json({ error: 'Invalid or expired session' });
+    if (!session.paid) return res.status(402).json({ error: 'Payment required', payTo: payments.paymentWallet, amount: payments.minPaymentEth, network: 'Sepolia' });
+    req.walletAddress = session.address;
+    next();
+}
+
+// ── Wallet Auth Routes ──────────────────────────
+
+// Get nonce to sign
+app.get('/api/auth/nonce', (req, res) => {
+    const { address } = req.query;
+    if (!address) return res.status(400).json({ error: 'address query param required' });
+    try {
+        const result = payments.getNonce(address);
+        res.json(result);
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// Verify signature, get session token
+app.post('/api/auth/verify', (req, res) => {
+    const { address, signature } = req.body;
+    if (!address || !signature) return res.status(400).json({ error: 'address and signature required' });
+    try {
+        const result = payments.verifySignature(address, signature);
+        res.json(result);
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// Check payment status / verify tx
+app.get('/api/auth/status', async (req, res) => {
+    const token = req.headers['x-session-token'];
+    if (!token) return res.status(400).json({ error: 'x-session-token header required' });
+    try {
+        const result = await payments.checkPayment(token, req.query.txHash);
+        res.json(result);
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
+// ── A2A Agent Card ──────────────────────────────
+
+app.get('/.well-known/agent.json', (req, res) => {
+    res.json({
+        name: 'Alfred',
+        description: 'Crypto & tech intelligence curator running in a TEE. Crawls RSS, HackerNews, and Twitter, scores headlines with AI, and surfaces high-signal items.',
+        url: `${req.protocol}://${req.get('host')}`,
+        version: '2.2.0',
+        capabilities: {
+            streaming: false,
+            pushNotifications: false
+        },
+        skills: [
+            {
+                id: 'signals',
+                name: 'Get Signals',
+                description: 'Returns AI-scored news signals from crypto, tech, and business feeds.',
+                inputSchema: {
+                    type: 'object',
+                    properties: {
+                        limit: { type: 'number', description: 'Max items to return', default: 20 },
+                        minScore: { type: 'number', description: 'Minimum score filter (1-10)', default: 0 }
+                    }
+                }
+            },
+            {
+                id: 'briefing',
+                name: 'News Briefing',
+                description: 'Returns a formatted news briefing summarizing top stories.'
+            },
+            {
+                id: 'stats',
+                name: 'Curator Stats',
+                description: 'Returns curator statistics (feeds, seen items, signal count).'
+            }
+        ],
+        payment: {
+            required: true,
+            network: 'sepolia',
+            chainId: 11155111,
+            token: 'ETH',
+            amount: payments.minPaymentEth,
+            recipient: payments.paymentWallet,
+            description: 'One-time payment to unlock premium signal access. Send ETH, then submit tx hash for on-chain verification.'
+        },
+        authentication: {
+            schemes: ['wallet-signature', 'bearer-token']
+        }
+    });
+});
+
+// ── A2A Task Endpoint ───────────────────────────
+
+app.post('/a2a', express.json(), async (req, res) => {
+    const { method, params, id } = req.body || {};
+
+    // JSON-RPC style
+    if (method === 'tasks/send') {
+        const task = params?.task || params;
+        const skill = task?.skill || task?.action;
+        const input = task?.input || task?.args || {};
+
+        // Check for session/payment
+        const sessionToken = req.headers['x-session-token'];
+        const txHash = input.txHash || req.headers['x-tx-hash'];
+
+        // If they provide a txHash but no session, create a quick session from tx
+        if (txHash && !sessionToken) {
+            try {
+                const result = await payments.checkPayment(null, txHash);
+                if (result?.paid) {
+                    // Tx verified — process the request
+                    return await handleA2ASkill(skill, input, id, res);
+                }
+            } catch {}
+        }
+
+        // Check session-based auth
+        if (sessionToken) {
+            const session = payments.getSession(sessionToken);
+            if (session?.paid) {
+                return await handleA2ASkill(skill, input, id, res);
+            }
+        }
+
+        // Allow free skills
+        if (skill === 'stats') {
+            return await handleA2ASkill(skill, input, id, res);
+        }
+
+        // Payment required
+        return res.json({
+            jsonrpc: '2.0',
+            id,
+            result: {
+                status: 'payment-required',
+                payment: {
+                    network: 'sepolia',
+                    chainId: 11155111,
+                    token: 'ETH',
+                    amount: payments.minPaymentEth,
+                    recipient: payments.paymentWallet,
+                    instructions: 'Send ETH to the recipient address, then resend this request with the tx hash in input.txHash or x-tx-hash header.'
+                }
+            }
+        });
+    }
+
+    // Unknown method
+    res.status(400).json({ jsonrpc: '2.0', id, error: { code: -32601, message: 'Method not found. Use tasks/send.' } });
+});
+
+async function handleA2ASkill(skill, input, id, res) {
+    try {
+        switch (skill) {
+            case 'signals': {
+                const limit = parseInt(input.limit) || 20;
+                const minScore = parseInt(input.minScore) || 0;
+                const signals = curator.memory.highSignals
+                    .filter(s => s.score >= minScore)
+                    .sort((a, b) => b.score - a.score || new Date(b.timestamp) - new Date(a.timestamp))
+                    .slice(0, limit);
+                return res.json({ jsonrpc: '2.0', id, result: { status: 'completed', data: { count: signals.length, signals } } });
+            }
+            case 'briefing': {
+                const { runNewsCycle } = require('./news-cycle');
+                const result = await runNewsCycle({ storeOnDA: false });
+                return res.json({ jsonrpc: '2.0', id, result: { status: 'completed', data: { briefing: result.briefing, articleCount: result.articleCount } } });
+            }
+            case 'stats': {
+                return res.json({ jsonrpc: '2.0', id, result: { status: 'completed', data: { feeds: 7, seenItems: curator.memory.seenHashes.length, highSignals: curator.memory.highSignals.length } } });
+            }
+            default:
+                return res.json({ jsonrpc: '2.0', id, error: { code: -32602, message: `Unknown skill: ${skill}. Available: signals, briefing, stats` } });
+        }
+    } catch (err) {
+        return res.json({ jsonrpc: '2.0', id, error: { code: -32000, message: err.message } });
+    }
+}
+
+// ── Public Routes ───────────────────────────────
+
 // Health check (no auth)
 app.get('/health', (req, res) => {
     res.json({
@@ -42,8 +247,8 @@ app.get('/health', (req, res) => {
     });
 });
 
-// Get high-signal items
-app.get('/api/signals', authMiddleware, (req, res) => {
+// Get high-signal items (premium — requires payment)
+app.get('/api/signals', paidMiddleware, (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const minScore = parseInt(req.query.minScore) || 0;
     const signals = curator.memory.highSignals
@@ -53,8 +258,8 @@ app.get('/api/signals', authMiddleware, (req, res) => {
     res.json({ count: signals.length, signals, attestation: getAttestation() });
 });
 
-// Get latest news briefing
-app.get('/api/briefing', authMiddleware, async (req, res) => {
+// Get latest news briefing (premium — requires payment)
+app.get('/api/briefing', paidMiddleware, async (req, res) => {
     try {
         const result = await runNewsCycle({ storeOnDA: false });
         res.json({
