@@ -234,9 +234,9 @@ openclaw.json                # OpenClaw gateway config
 
 ## Current Deployment
 
-- **App ID:** `0xCfd0A2BEbDD65e8Ed4e8C05f19e0A95cb5de4f2A`
+- **App ID:** `0x416987cc995B1BAd7646CC2B8Cc45Def5e8C6dbA`
 - **Platform:** Intel TDX (EigenCompute)
-- **Dashboard:** [verify-sepolia.eigencloud.xyz](https://verify-sepolia.eigencloud.xyz/app/0xCfd0A2BEbDD65e8Ed4e8C05f19e0A95cb5de4f2A)
+- **Dashboard:** [verify-sepolia.eigencloud.xyz](https://verify-sepolia.eigencloud.xyz/app/0x416987cc995B1BAd7646CC2B8Cc45Def5e8C6dbA)
 
 ## License
 
