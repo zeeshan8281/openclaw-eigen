@@ -94,6 +94,27 @@ app.get('/api/auth/status', async (req, res) => {
     }
 });
 
+// ── Telegram Payment Routes (called by Alfred via curl) ──
+
+// Check if a Telegram user has paid
+app.get('/api/telegram/payment-status', (req, res) => {
+    const { chatId } = req.query;
+    if (!chatId) return res.status(400).json({ error: 'chatId required' });
+    res.json(payments.isTelegramPaid(chatId));
+});
+
+// Verify a Telegram user's payment by txHash
+app.post('/api/telegram/verify-payment', async (req, res) => {
+    const { chatId, txHash } = req.body;
+    if (!chatId || !txHash) return res.status(400).json({ error: 'chatId and txHash required' });
+    try {
+        const result = await payments.verifyTelegramPayment(chatId, txHash);
+        res.json(result);
+    } catch (err) {
+        res.status(400).json({ error: err.message });
+    }
+});
+
 // ── A2A Agent Card ──────────────────────────────
 
 app.get('/.well-known/agent.json', (req, res) => {

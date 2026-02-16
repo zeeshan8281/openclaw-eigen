@@ -10,6 +10,7 @@ class PaymentService {
         console.log('[Payments] Wallet:', this.paymentWallet, '| Min:', this.minPaymentEth, 'ETH');
         this.nonces = new Map();   // address -> { nonce, expires }
         this.sessions = new Map(); // token -> { address, verified, paid, expires }
+        this.telegramPaid = new Map(); // chatId -> { paid, txHash, expires }
     }
 
     // Step 1: Generate a nonce for wallet to sign
@@ -107,6 +108,43 @@ class PaymentService {
             session.txHash = txHash;
         }
         return { paid: true, txHash, address: session.address };
+    }
+
+    // Telegram payment check (by chat ID)
+    isTelegramPaid(chatId) {
+        const entry = this.telegramPaid.get(String(chatId));
+        if (!entry) return { paid: false, payTo: this.paymentWallet, amount: this.minPaymentEth, network: 'Sepolia' };
+        if (Date.now() > entry.expires) {
+            this.telegramPaid.delete(String(chatId));
+            return { paid: false, payTo: this.paymentWallet, amount: this.minPaymentEth, network: 'Sepolia' };
+        }
+        return { paid: true, txHash: entry.txHash };
+    }
+
+    // Verify Telegram user payment by txHash
+    async verifyTelegramPayment(chatId, txHash) {
+        if (!this.paymentWallet) throw new Error('No PAYMENT_WALLET configured');
+        if (!txHash) return { paid: false, error: 'txHash required' };
+
+        const minWei = ethers.parseEther(this.minPaymentEth);
+        const receipt = await this.provider.getTransactionReceipt(txHash);
+        if (!receipt) return { paid: false, error: 'Transaction not confirmed yet' };
+        if (receipt.status === 0) return { paid: false, error: 'Transaction reverted on-chain' };
+
+        const tx = await this.provider.getTransaction(txHash);
+        if (!tx) return { paid: false, error: 'Transaction not found' };
+
+        const toMatch = tx.to?.toLowerCase() === this.paymentWallet.toLowerCase();
+        const valueOk = tx.value >= minWei;
+        if (!toMatch) return { paid: false, error: 'Recipient does not match payment wallet' };
+        if (!valueOk) return { paid: false, error: `Insufficient amount. Sent: ${ethers.formatEther(tx.value)} ETH, required: ${this.minPaymentEth} ETH` };
+
+        this.telegramPaid.set(String(chatId), {
+            paid: true,
+            txHash,
+            expires: Date.now() + 24 * 60 * 60 * 1000 // 24h access
+        });
+        return { paid: true, txHash };
     }
 
     // Get session info
