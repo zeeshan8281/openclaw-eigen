@@ -45,7 +45,11 @@ app.get('/health', (req, res) => {
 // Get high-signal items
 app.get('/api/signals', authMiddleware, (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
-    const signals = curator.memory.highSignals.slice(-limit).reverse();
+    const minScore = parseInt(req.query.minScore) || 0;
+    const signals = curator.memory.highSignals
+        .filter(s => s.score >= minScore)
+        .sort((a, b) => b.score - a.score || new Date(b.timestamp) - new Date(a.timestamp))
+        .slice(0, limit);
     res.json({ count: signals.length, signals, attestation: getAttestation() });
 });
 
@@ -85,6 +89,37 @@ app.post('/api/curate', authMiddleware, async (req, res) => {
     }
 });
 
+// Debug: test scoring a single headline
+app.get('/api/test-score', authMiddleware, async (req, res) => {
+    const headline = req.query.headline || 'Bitcoin falls to $68,000 as crypto market drowns in red';
+    try {
+        const { OpenRouterService } = require('./services/openrouter');
+        const openrouter = new OpenRouterService();
+        const prompt = `Rate this news headline from 1-10 based on significance and novelty. Topics: crypto, blockchain, AI, technology, business, macro economics. 1=routine/spam, 5=mildly interesting, 8=important development, 10=critical breaking event. Reply with ONLY the number.\n\n"${headline}"`;
+        const result = await openrouter.chatCompletion("You are a senior news editor at a tech and crypto intelligence service. Reply with only a single number from 1 to 10.", prompt, 50);
+        const cleaned = result.content.trim().replace(/[^0-9]/g, '');
+        const score = parseInt(cleaned);
+        res.json({ headline, raw: result.content, cleaned, score, isNaN: isNaN(score) });
+    } catch (err) {
+        res.json({ headline, error: err.message });
+    }
+});
+
+// Reset curator memory (clear seen hashes, keep signals)
+app.post('/api/reset', authMiddleware, (req, res) => {
+    const keepSignals = req.query.keepSignals !== 'false';
+    const oldSeen = curator.memory.seenHashes.length;
+    const oldSignals = curator.memory.highSignals.length;
+    curator.memory.seenHashes = [];
+    if (!keepSignals) curator.memory.highSignals = [];
+    curator.saveMemory();
+    res.json({
+        ok: true,
+        cleared: { seenHashes: oldSeen, signals: keepSignals ? 0 : oldSignals },
+        message: 'Memory reset. Next curation cycle will re-score all items.'
+    });
+});
+
 function startAPI() {
     app.listen(API_PORT, '0.0.0.0', () => {
         console.log(`[API] Listening on port ${API_PORT}`);
@@ -102,6 +137,14 @@ async function startCuratorService() {
 
     // Start Express API
     startAPI();
+
+    // Run initial curation cycle immediately on startup
+    console.log(`[${new Date().toISOString()}] Running initial curator cycle...`);
+    try {
+        await curator.runCycle();
+    } catch (err) {
+        console.error('Initial curator cycle failed:', err.message);
+    }
 
     // Background curator loop
     while (true) {

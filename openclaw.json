@@ -6,8 +6,8 @@
                 "api": "openai-completions",
                 "models": [
                     {
-                        "id": "nvidia/nemotron-nano-9b-v2:free",
-                        "name": "Nemotron 9B"
+                        "id": "stepfun/step-3.5-flash:free",
+                        "name": "Step 3.5 Flash"
                     }
                 ]
             }
@@ -16,7 +16,7 @@
     "agents": {
         "defaults": {
             "model": {
-                "primary": "openrouter/nvidia/nemotron-nano-9b-v2:free"
+                "primary": "openrouter/stepfun/step-3.5-flash:free"
             },
             "compaction": {
                 "mode": "safeguard"

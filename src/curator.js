@@ -9,11 +9,13 @@ const RSS_FEEDS = [
     'https://blog.ethereum.org/feed.xml',
     'https://vitalik.ca/feed.xml',
     'https://feeds.bbci.co.uk/news/technology/rss.xml',
-    'https://feeds.bbci.co.uk/news/business/rss.xml'
+    'https://feeds.bbci.co.uk/news/business/rss.xml',
+    'https://hnrss.org/frontpage?count=30'
 ];
 
 const MEMORY_FILE = path.join(__dirname, '../data/curator_memory.json');
-const MAX_HISTORY = 200;
+const MAX_HISTORY = 500;
+const MAX_SCORE_PER_CYCLE = 20; // Score up to 20 items per cycle
 const SCORE_DELAY_MS = 2000; // 2s between LLM calls to avoid rate limits
 
 class Curator {
@@ -68,11 +70,13 @@ class Curator {
 
             console.log(`[Curator] ${newItems.length} new items to score`);
 
-            // Batch score with delays to avoid rate limits
-            // Only score up to 10 items per cycle to stay within free tier
-            const toScore = newItems.slice(0, 10);
+            // Score items with delays to avoid rate limits
+            const toScore = newItems.slice(0, MAX_SCORE_PER_CYCLE);
+            let scored = 0;
+            let failed = 0;
             for (const item of toScore) {
-                await this.scoreItem(item);
+                const success = await this.scoreItem(item);
+                if (success) scored++; else failed++;
                 // Mark as seen regardless of score result
                 const hash = Buffer.from(item.title).toString('base64');
                 this.memory.seenHashes.push(hash);
@@ -80,11 +84,11 @@ class Curator {
                     await new Promise(r => setTimeout(r, SCORE_DELAY_MS));
                 }
             }
+            console.log(`[Curator] Scored ${scored} items (${failed} failed) out of ${toScore.length}`);
 
-            // Mark remaining items as seen (skip scoring to avoid rate limits)
-            for (const item of newItems.slice(10)) {
-                const hash = Buffer.from(item.title).toString('base64');
-                this.memory.seenHashes.push(hash);
+            // DON'T mark remaining items as seen — they'll be scored in the next cycle
+            if (newItems.length > MAX_SCORE_PER_CYCLE) {
+                console.log(`[Curator] ${newItems.length - MAX_SCORE_PER_CYCLE} items deferred to next cycle`);
             }
 
             // Prune memory
@@ -126,24 +130,59 @@ class Curator {
     }
 
     async scoreItem(item) {
+        let score = this.keywordScore(item.title);
+
+        // Try LLM scoring, fall back to keyword score
         try {
-            const prompt = `Rate this crypto news headline 1-10. 1=spam, 10=critical event. Reply with ONLY the number.\n\n"${item.title}"`;
+            const prompt = `Rate this news headline from 1-10 based on significance and novelty. Topics: crypto, blockchain, AI, technology, business, macro economics. 1=routine/spam, 5=mildly interesting, 8=important development, 10=critical breaking event. Reply with ONLY a single digit number.\n\n"${item.title}"`;
 
-            const res = await this.openrouter.chatCompletion("You are a news editor. Reply with only a number.", prompt, 10);
-            const score = parseInt(res.content.replace(/\D/g, ''));
+            const res = await this.openrouter.chatCompletion("Reply with only a single number from 1 to 10. No other text.", prompt, 50);
+            const cleaned = res.content.trim().replace(/[^0-9]/g, '');
+            const llmScore = parseInt(cleaned);
 
-            if (!isNaN(score) && score >= 8) {
-                console.log(`[Curator] HIGH SIGNAL (${score}/10): ${item.title}`);
-                this.memory.highSignals.push({
-                    title: item.title,
-                    link: item.link,
-                    score,
-                    timestamp: new Date().toISOString()
-                });
+            if (!isNaN(llmScore) && llmScore >= 1 && llmScore <= 10) {
+                score = llmScore;
+                console.log(`[Curator] LLM score ${score}/10: ${item.title}`);
+            } else {
+                console.warn(`[Curator] LLM parse fail — raw: "${res.content}", using keyword score ${score}`);
             }
         } catch (err) {
-            console.warn(`[Curator] Score failed: ${err.message}`);
+            console.warn(`[Curator] LLM score failed (${err.message}), using keyword score ${score}`);
         }
+
+        // Store ALL items with their scores (even low ones get tracked)
+        this.memory.highSignals.push({
+            title: item.title,
+            link: item.link,
+            source: item.creator || item.author || '',
+            score,
+            timestamp: new Date().toISOString()
+        });
+
+        return true;
+    }
+
+    // Keyword-based fallback scoring
+    keywordScore(title) {
+        const t = title.toLowerCase();
+        let score = 5; // baseline
+
+        // High-value keywords
+        const highKeywords = ['bitcoin', 'ethereum', 'btc', 'eth', 'regulation', 'sec', 'hack', 'breach',
+            'ai ', 'artificial intelligence', 'gpt', 'llm', 'openai', 'google', 'apple', 'microsoft',
+            'billion', 'million', 'ipo', 'acquisition', 'merger', 'crash', 'surge', 'record',
+            'war', 'sanctions', 'fed ', 'interest rate', 'inflation', 'recession'];
+        const medKeywords = ['crypto', 'blockchain', 'defi', 'nft', 'web3', 'token', 'stablecoin',
+            'startup', 'funding', 'raised', 'launch', 'release', 'update', 'upgrade'];
+
+        for (const kw of highKeywords) {
+            if (t.includes(kw)) { score += 2; break; }
+        }
+        for (const kw of medKeywords) {
+            if (t.includes(kw)) { score += 1; break; }
+        }
+
+        return Math.min(score, 10);
     }
 
     getDetails() {
