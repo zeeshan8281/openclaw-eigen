@@ -1,0 +1,53 @@
+#!/usr/bin/expect -f
+set timeout 600
+log_user 1
+
+spawn /Users/zeeshan/.npm/_npx/ef96f67cfe85f760/node_modules/.bin/ecloud compute app deploy
+
+# Handle all prompts in a loop - select defaults for everything
+for {set i 0} {$i < 30} {incr i} {
+    expect {
+        -re "verifiable source" {
+            send "n\r"
+        }
+        -re "App name|app name" {
+            send "eigen-openclaw\r"
+        }
+        -re "How would you like to deploy" {
+            # Select "Deploy existing image from registry" (2nd option)
+            sleep 1
+            send "\x1b\[B\r"
+        }
+        -re "Docker image" {
+            send "zeeshan8281/eigen-openclaw:latest\r"
+        }
+        -re "navigate.*select" {
+            send "\r"
+        }
+        -re "\\(y/N\\)" {
+            send "y\r"
+        }
+        -re "\\(Y/n\\)" {
+            send "y\r"
+        }
+        -re "optional\\)" {
+            # Skip optional fields like Website URL, Description, Twitter
+            send "\r"
+        }
+        -re "\\?" {
+            # Generic prompt - press Enter for default
+            send "\r"
+        }
+        -re "Transaction sent" {
+            puts "\n--- Transaction submitted ---"
+        }
+        -re "deployed successfully" {
+            puts "\n--- DEPLOY SUCCESS ---"
+        }
+        eof {
+            break
+        }
+    }
+}
+
+expect eof
