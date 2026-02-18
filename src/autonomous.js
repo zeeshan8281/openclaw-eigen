@@ -103,6 +103,14 @@ app.get('/api/telegram/payment-status', (req, res) => {
     res.json(payments.isTelegramPaid(chatId));
 });
 
+// Redeem a beta invite code for a Telegram user
+app.post('/api/telegram/redeem-code', (req, res) => {
+    const { chatId, code } = req.body;
+    if (!chatId || !code) return res.status(400).json({ error: 'chatId and code required' });
+    const result = payments.redeemBetaCode(chatId, code);
+    res.json(result);
+});
+
 // Verify a Telegram user's payment by txHash
 app.post('/api/telegram/verify-payment', async (req, res) => {
     const { chatId, txHash } = req.body;

@@ -11,6 +11,13 @@ class PaymentService {
         this.nonces = new Map();   // address -> { nonce, expires }
         this.sessions = new Map(); // token -> { address, verified, paid, expires }
         this.telegramPaid = new Map(); // chatId -> { paid, txHash, expires }
+
+        // Beta invite code system
+        this.betaCode = process.env.BETA_INVITE_CODE || 'ALFRED-v1';
+        this.betaMaxUses = parseInt(process.env.BETA_MAX_USES, 10) || 15;
+        this.betaUsers = new Map(); // chatId -> { redeemedAt }
+        this.betaUsedCount = 0;
+        console.log('[Payments] Beta code active | Max uses:', this.betaMaxUses);
     }
 
     // Step 1: Generate a nonce for wallet to sign
@@ -110,12 +117,35 @@ class PaymentService {
         return { paid: true, txHash, address: session.address };
     }
 
+    // Redeem a beta invite code for a Telegram chat
+    redeemBetaCode(chatId, code) {
+        const id = String(chatId);
+        if (this.betaUsers.has(id)) {
+            return { success: true, alreadyRedeemed: true };
+        }
+        if (code !== this.betaCode) {
+            return { success: false, error: 'Invalid code' };
+        }
+        if (this.betaUsedCount >= this.betaMaxUses) {
+            return { success: false, error: 'Beta is full' };
+        }
+        this.betaUsers.set(id, { redeemedAt: Date.now() });
+        this.betaUsedCount++;
+        console.log(`[Payments] Beta code redeemed by chatId ${id} (${this.betaUsedCount}/${this.betaMaxUses})`);
+        return { success: true };
+    }
+
     // Telegram payment check (by chat ID)
     isTelegramPaid(chatId) {
-        const entry = this.telegramPaid.get(String(chatId));
+        const id = String(chatId);
+        // Beta users always have access
+        if (this.betaUsers.has(id)) {
+            return { paid: true, beta: true };
+        }
+        const entry = this.telegramPaid.get(id);
         if (!entry) return { paid: false, payTo: this.paymentWallet, amount: this.minPaymentEth, network: 'Sepolia' };
         if (Date.now() > entry.expires) {
-            this.telegramPaid.delete(String(chatId));
+            this.telegramPaid.delete(id);
             return { paid: false, payTo: this.paymentWallet, amount: this.minPaymentEth, network: 'Sepolia' };
         }
         return { paid: true, txHash: entry.txHash };

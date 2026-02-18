@@ -2,21 +2,21 @@
 set timeout 600
 log_user 1
 
-spawn /Users/zeeshan/.npm/_npx/ef96f67cfe85f760/node_modules/.bin/ecloud compute app deploy
+set env(ECLOUD_PRIVATE_KEY) "0xdf060fbd5881c815b13125e258d5db0e4ff175c7f5a3bbd5ccccc61fe6ea7152"
+spawn /Users/zeeshan/.npm/_npx/ef96f67cfe85f760/node_modules/.bin/ecloud compute app deploy --name eigen-openclaw --skip-profile --verbose --rpc-url https://sepolia.drpc.org
 
-# Handle all prompts in a loop - select defaults for everything
-for {set i 0} {$i < 30} {incr i} {
+for {set i 0} {$i < 100} {incr i} {
     expect {
         -re "verifiable source" {
             send "n\r"
         }
-        -re "App name|app name" {
-            send "eigen-openclaw\r"
-        }
-        -re "How would you like to deploy" {
-            # Select "Deploy existing image from registry" (2nd option)
+        -re "Choose deployment method" {
             sleep 1
-            send "\x1b\[B\r"
+            send "\r"
+        }
+        -re "Select image destination" {
+            sleep 1
+            send "\r"
         }
         -re "Docker image" {
             send "zeeshan8281/eigen-openclaw:latest\r"
@@ -30,24 +30,32 @@ for {set i 0} {$i < 30} {incr i} {
         -re "\\(Y/n\\)" {
             send "y\r"
         }
-        -re "optional\\)" {
-            # Skip optional fields like Website URL, Description, Twitter
+        -re "Website URL" {
             send "\r"
         }
-        -re "\\?" {
-            # Generic prompt - press Enter for default
+        -re "Description" {
             send "\r"
+        }
+        -re "Twitter" {
+            send "\r"
+        }
+        -re "optional\\)" {
+            send "\r"
+        }
+        -re "Waiting|Layer already exists|Pushed|Pulling|Extracting" {
+            exp_continue
         }
         -re "Transaction sent" {
             puts "\n--- Transaction submitted ---"
         }
-        -re "deployed successfully" {
+        -re "deployed successfully|Deployment confirmed" {
             puts "\n--- DEPLOY SUCCESS ---"
         }
         eof {
+            puts "\n--- Process ended ---"
             break
         }
     }
 }
 
-expect eof
+wait
