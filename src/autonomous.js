@@ -115,6 +115,35 @@ app.post('/api/telegram/verify-payment', async (req, res) => {
     }
 });
 
+// Payment-gated Telegram endpoints (server-enforced, not LLM-enforced)
+app.get('/api/telegram/signals', (req, res) => {
+    const { chatId } = req.query;
+    if (!chatId) return res.status(400).json({ error: 'chatId required' });
+    const status = payments.isTelegramPaid(chatId);
+    if (!status.paid) return res.status(402).json({ error: 'Payment required', ...status });
+    const limit = parseInt(req.query.limit) || 20;
+    const signals = curator.memory.highSignals
+        .sort((a, b) => b.score - a.score || new Date(b.timestamp) - new Date(a.timestamp))
+        .slice(0, limit);
+    const attestation = getAttestation();
+    res.json({ count: signals.length, signals, attestation });
+});
+
+app.get('/api/telegram/briefing', async (req, res) => {
+    const { chatId } = req.query;
+    if (!chatId) return res.status(400).json({ error: 'chatId required' });
+    const status = payments.isTelegramPaid(chatId);
+    if (!status.paid) return res.status(402).json({ error: 'Payment required', ...status });
+    try {
+        const { runNewsCycle } = require('./news-cycle');
+        const result = await runNewsCycle({ storeOnDA: false });
+        const attestation = getAttestation();
+        res.json({ briefing: result.briefing, articleCount: result.articleCount, attestation });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 // ── A2A Agent Card ──────────────────────────────
 
 app.get('/.well-known/agent.json', (req, res) => {
